@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { createEdgeLines, createEdgeMaterial } from './edgeLines.js'
 import { sceneToSvg } from './exportSvg.js'
 import { liftProfile } from './ribbon.js'
+import { runSliced } from './sliced.js'
 import { stackHeights } from './stacking.js'
 import { createLayerGeometry, cssColor } from './svg.js'
 
@@ -39,6 +40,8 @@ export class SvgScene {
   display = 'shaded'
   autoRotate = false
   onRotate = null
+  // Called with the SVG once its model is built and on screen.
+  onBuilt = null
 
   // Targets are unbounded degrees so turning past ±180° never spins the long way round.
   rotation = { target: { ...INITIAL_ROTATION }, current: { x: 0, y: 0 } }
@@ -125,7 +128,7 @@ export class SvgScene {
   setSvg(svg) {
     this.svg = svg
     this.cancelBuild()
-    this.build()
+    this.startBuild()
   }
 
   setShape(shape) {
@@ -135,6 +138,10 @@ export class SvgScene {
 
   setLook(look) {
     this.look = look
+    this.restyle()
+  }
+
+  restyle() {
     for (const mesh of this.model.children) {
       for (const material of mesh.userData.materials) this.styleMaterial(material, mesh.userData.layer)
     }
@@ -200,7 +207,7 @@ export class SvgScene {
     this.renderer.setAnimationLoop(null)
     this.cancelBuild()
     for (const cleanup of this.cleanups) cleanup()
-    this.clearModel()
+    disposeModel(this.model)
     this.edgeMaterial.dispose()
     this.paperMaterial.dispose()
     this.hiddenMaterial.dispose()
@@ -211,20 +218,32 @@ export class SvgScene {
 
   /* ---------- Geometry ---------- */
 
-  clearModel() {
-    for (const mesh of this.model.children) {
-      mesh.geometry.dispose()
-      mesh.userData.edges?.geometry.dispose()
-      for (const material of mesh.userData.materials) material.dispose()
+  // Builds the current SVG into a new group, which stays off screen until it
+  // is complete (see startBuild). A generator that pauses between layers (see
+  // runSliced).
+  *buildSteps() {
+    const model = new THREE.Group()
+    let complete = false
+    try {
+      if (this.svg) yield* this.fillModel(model)
+      complete = true
+    } finally {
+      if (!complete) disposeModel(model)
     }
-    this.model.clear()
+    return model
   }
 
-  build() {
-    this.clearModel()
-    if (!this.svg) return
+  swapModel(model) {
+    this.pivot.remove(this.model)
+    disposeModel(this.model)
+    this.pivot.add(model)
+    this.model = model
+    // The look or display may have changed while this was being built.
+    this.restyle()
+    this.applyDisplay()
+  }
 
-    const { model } = this
+  *fillModel(model) {
     const { layers, center, maxDim, grid } = this.svg
     const n = layers.length
     const base = Math.max(maxDim * (this.shape.depth / 100), maxDim * 0.002)
@@ -236,7 +255,7 @@ export class SvgScene {
     // zero, so touching faces don't z-fight).
     const gap = Math.max(maxDim * (this.shape.gap / 100), minRise)
     const lifts = []
-    const ranges = stackHeights(layers, grid, {
+    const ranges = yield* stackHeights(layers, grid, {
       base,
       step: maxDim * (LAYER_STEP / 100) + minRise,
       lift: maxDim * (LINE_LIFT / 100) + minRise,
@@ -251,7 +270,9 @@ export class SvgScene {
     // Backs are staggered by a hair for the same reason.
     const epsilon = Math.min(minRise, (base * 0.5) / n)
 
-    layers.forEach((layer, i) => {
+    const lineMode = this.display !== 'shaded'
+    for (const [i, layer] of layers.entries()) {
+      yield
       const floor = Math.max(ranges[i].floor, i * epsilon)
       const thickness = ranges[i].top - floor
       let geometry
@@ -259,7 +280,7 @@ export class SvgScene {
         geometry = createLayerGeometry(layer, { thickness, bevel, lift: lifts[i] })
       } catch (err) {
         console.warn('Skipping a layer that could not be extruded', err)
-        return
+        continue
       }
 
       // Walls are pushed back in the depth test so they never bleed through the
@@ -277,9 +298,13 @@ export class SvgScene {
       mesh.receiveShadow = true
       mesh.userData.layer = layer
       mesh.userData.materials = materials
+      // Edge lines are slow too, so in a line mode they are made here, piece by piece.
+      if (lineMode) {
+        mesh.userData.edges = createEdgeLines(geometry, this.edgeMaterial)
+        if (mesh.userData.edges) mesh.add(mesh.userData.edges)
+      }
       model.add(mesh)
-    })
-    this.applyDisplay()
+    }
 
     // Centre the model on the pivot (SVG y points down, so flip it).
     const box = new THREE.Box3()
@@ -304,12 +329,35 @@ export class SvgScene {
     if (!this.svg) return
     this.cancelBuild()
     if (this.svg.layers.length > LIVE_REBUILD_LIMIT) {
-      const id = setTimeout(() => this.build(), 200)
+      const id = setTimeout(() => this.startBuild(), 200)
       this.pendingBuild = () => clearTimeout(id)
     } else {
-      const id = requestAnimationFrame(() => this.build())
+      const id = requestAnimationFrame(() => this.startBuild())
       this.pendingBuild = () => cancelAnimationFrame(id)
     }
+  }
+
+  startBuild() {
+    const controller = new AbortController()
+    this.pendingBuild = () => controller.abort()
+    const { signal } = controller
+    const build = async () => {
+      const model = await runSliced(this.buildSteps(), { signal })
+      // Shaders the new model needs are compiled in the background first, so
+      // its first frame doesn't stall the page.
+      try {
+        await this.renderer.compileAsync(model, this.camera, this.scene)
+      } finally {
+        if (signal.aborted) disposeModel(model)
+      }
+      signal.throwIfAborted()
+      this.swapModel(model)
+      this.pendingBuild = null
+      this.onBuilt?.(this.svg)
+    }
+    build().catch((err) => {
+      if (!signal.aborted) console.error(err)
+    })
   }
 
   cancelBuild() {
@@ -403,4 +451,13 @@ export class SvgScene {
       this.onRotate?.({ x, y })
     }
   }
+}
+
+function disposeModel(model) {
+  for (const mesh of model.children) {
+    mesh.geometry.dispose()
+    mesh.userData.edges?.geometry.dispose()
+    for (const material of mesh.userData.materials) material.dispose()
+  }
+  model.clear()
 }

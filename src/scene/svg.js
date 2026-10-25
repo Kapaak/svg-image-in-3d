@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js'
 import { cleanFill, halfThickness, trianglesToShapes } from './clean.js'
 import { createRibbonGeometry, ribbonFromOutline, ribbonFromStroke } from './ribbon.js'
+import { runSliced } from './sliced.js'
 import { rasterizeFootprints } from './stacking.js'
 
 let colorCtx
@@ -67,12 +68,51 @@ function resolvePaint(value, root) {
   return cssColor(v)
 }
 
+// Moves <style> rules into each matching element's style attribute. SVGLoader
+// reads rules with Object.entries(rule.style), which in Safari only lists the
+// property names, not their values, so every class-styled shape (as
+// Illustrator exports them) lost its fill and stroke there. Inline styles
+// still win over the rules, as in CSS.
+function inlineStylesheets(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+  const styles = [...doc.querySelectorAll('style')]
+  if (!styles.length || doc.querySelector('parsererror')) return text
+
+  const declarations = new Map()
+  for (const style of styles) {
+    for (const rule of style.sheet?.cssRules ?? []) {
+      if (!(rule instanceof CSSStyleRule)) continue
+      let targets
+      try {
+        targets = doc.querySelectorAll(rule.selectorText)
+      } catch {
+        continue
+      }
+      let css = ''
+      for (let i = 0; i < rule.style.length; i++) {
+        const name = rule.style[i]
+        css += `${name}:${rule.style.getPropertyValue(name)};`
+      }
+      for (const target of targets) declarations.set(target, (declarations.get(target) ?? '') + css)
+    }
+    style.remove()
+  }
+  for (const [target, css] of declarations) target.setAttribute('style', css + (target.getAttribute('style') ?? ''))
+  return new XMLSerializer().serializeToString(doc)
+}
+
 // Turns SVG markup into a flat list of layers (fills and strokes) in paint
 // order. `weight` scales how thick lines and shapes are drawn (1 = as in the file).
-export function parseSvg(text, { weight = 1 } = {}) {
+// Large files take a while, so the work is spread over several tasks and the
+// page stays responsive; aborting `signal` stops it.
+export function parseSvg(text, { weight = 1, signal } = {}) {
+  return runSliced(parseSteps(text, weight), { signal })
+}
+
+function* parseSteps(text, weight) {
   let data
   try {
-    data = new SVGLoader().parse(text)
+    data = new SVGLoader().parse(inlineStylesheets(text))
   } catch {
     throw new Error('This file could not be read as an SVG.')
   }
@@ -81,6 +121,7 @@ export function parseSvg(text, { weight = 1 } = {}) {
   const parts = []
 
   for (const path of data.paths) {
+    yield
     const style = path.userData.style
     if (style.visibility === 'hidden') continue
     const opacity = style.opacity ?? 1
@@ -107,6 +148,7 @@ export function parseSvg(text, { weight = 1 } = {}) {
 
   const layers = []
   for (const { kind, path, style, shapes, half, color, opacity } of parts) {
+    yield
     if (kind === 'fill') {
       const offset = (weight - 1) * Math.min(half, typicalHalf)
       const sized = offset ? cleanFill(path, style.fillRule, offset) : shapes
@@ -153,7 +195,7 @@ export function parseSvg(text, { weight = 1 } = {}) {
   }
   const size = bounds.getSize(new THREE.Vector2())
   const maxDim = Math.max(size.x, size.y) || 1
-  const grid = rasterizeFootprints(layers, bounds, maxDim)
+  const grid = yield* rasterizeFootprints(layers, bounds, maxDim)
 
   return { layers, center: bounds.getCenter(new THREE.Vector2()), maxDim, grid }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import sampleSvg from './assets/sample.svg?raw'
 import RangeControl from './components/RangeControl.jsx'
 import Stage from './components/Stage.jsx'
@@ -9,10 +9,29 @@ import './App.css'
 
 const isSvgFile = (file) => file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)
 
+// Parses at a line weight (%), falling back to the file as drawn if that makes
+// everything shrink away; then it throws with a readable message if the file
+// can't be used at all. The result remembers the markup it came from.
+async function parseAtWeight(text, weight, signal) {
+  let data
+  try {
+    data = await parseSvg(text, { weight: weight / 100, signal })
+  } catch (err) {
+    if (signal.aborted || weight === 100) throw err
+    data = await parseSvg(text, { signal })
+  }
+  return { ...data, text }
+}
+
 function App() {
   const stageRef = useRef(null)
-  const [svg, setSvg] = useState({ name: 'sample.svg', text: sampleSvg })
   const [weight, setWeight] = useState(100)
+  // The SVG on show: its name, the line weight it was parsed at, and the result.
+  const [current, setCurrent] = useState(null)
+  // The file being loaded ({ name, text }), until it is on screen.
+  const [loading, setLoading] = useState({ name: 'sample.svg', text: sampleSvg })
+  const loadRef = useRef(null)
+  const weightRef = useRef(weight)
   const [rotation, setRotation] = useState(INITIAL_ROTATION)
   const [autoRotate, setAutoRotate] = useState(false)
   const [shape, setShape] = useState({ depth: 8, gap: 2, flip: false })
@@ -23,17 +42,17 @@ function App() {
 
   const showToast = useCallback((message) => setToast({ message, visible: true }), [])
 
-  // Line weight changes outlines, overlaps and loops, so the SVG is parsed again.
-  // Deferring it keeps the slider responsive while that happens.
-  const deferredWeight = useDeferredValue(weight)
-  const data = useMemo(() => {
-    try {
-      return parseSvg(svg.text, { weight: deferredWeight / 100 })
-    } catch {
-      // e.g. everything shrank away; fall back to the file as drawn
-      return parseSvg(svg.text)
-    }
-  }, [svg, deferredWeight])
+  // Line weight changes outlines, overlaps and loops, so the SVG is parsed
+  // again; a newer weight cancels a parse still running for an older one.
+  useEffect(() => {
+    weightRef.current = weight
+    if (!current || current.weight === weight) return
+    const controller = new AbortController()
+    parseAtWeight(current.data.text, weight, controller.signal).then((data) => {
+      if (!controller.signal.aborted) setCurrent({ ...current, weight, data })
+    }, () => {})
+    return () => controller.abort()
+  }, [current, weight])
 
   useEffect(() => {
     if (!toast.visible) return
@@ -41,14 +60,36 @@ function App() {
     return () => clearTimeout(id)
   }, [toast])
 
-  const loadText = useCallback((text, name) => {
+  // A new file replaces one still loading. The old model stays on screen,
+  // under the loading state, until the new one is built.
+  const loadText = useCallback(async (text, name) => {
+    loadRef.current?.abort()
+    const controller = new AbortController()
+    loadRef.current = controller
+    setLoading({ name, text })
+    const weight = weightRef.current
     try {
-      parseSvg(text) // throws with a readable message if the file can't be used
-      setSvg({ name, text })
+      const data = await parseAtWeight(text, weight, controller.signal)
+      if (!controller.signal.aborted) setCurrent({ name, weight, data })
     } catch (err) {
+      if (controller.signal.aborted) return
+      setLoading(null)
       showToast(err.message)
     }
   }, [showToast])
+
+  // The sample, at the initial weight; `loading` already starts out on it.
+  useEffect(() => {
+    const controller = new AbortController()
+    parseAtWeight(sampleSvg, 100, controller.signal).then((data) => {
+      if (!controller.signal.aborted) setCurrent((c) => c ?? { name: 'sample.svg', weight: 100, data })
+    }, () => {})
+    return () => controller.abort()
+  }, [])
+
+  const onBuilt = useCallback((built) => {
+    setLoading((l) => (l && built?.text === l.text ? null : l))
+  }, [])
 
   const loadFile = useCallback(async (file) => {
     if (!file) return
@@ -107,7 +148,7 @@ function App() {
       showToast('Nothing to export.')
       return
     }
-    const fileName = `${svg.name.replace(/\.svg$/i, '')}${EXPORT_STYLES[style].suffix}.svg`
+    const fileName = `${current.name.replace(/\.svg$/i, '')}${EXPORT_STYLES[style].suffix}.svg`
     const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
     const link = document.createElement('a')
     link.href = url
@@ -118,24 +159,36 @@ function App() {
   }
 
   const updateShape = (key) => (value) => setShape((s) => ({ ...s, [key]: value }))
-  const layerCount = data.layers.length
-  const hasCrossings = data.layers.some((layer) => layer.ribbon)
+  const layers = current?.data.layers ?? []
+  const layerCount = layers.length
+  const hasCrossings = layers.some((layer) => layer.ribbon)
+  const updating = !loading && current && current.weight !== weight
 
   return (
     <main className="app">
       <Stage
         ref={stageRef}
-        svg={data}
+        svg={current?.data ?? null}
         shape={shape}
         look={look}
         display={style}
         autoRotate={autoRotate}
         onRotate={setRotation}
+        onBuilt={onBuilt}
       >
-        <div className="badge">{svg.name} · {layerCount} {layerCount === 1 ? 'layer' : 'layers'}</div>
+        {current && (
+          <div className="badge">
+            {current.name} · {layerCount} {layerCount === 1 ? 'layer' : 'layers'}
+            {updating && ' · Updating…'}
+          </div>
+        )}
         <div className="hint">Drag to rotate · Scroll to zoom</div>
         <div className={`drop-overlay${dragOver ? ' visible' : ''}`} aria-hidden="true">
           <div>Drop your SVG to load it</div>
+        </div>
+        <div className={`loading-overlay${loading ? ' visible' : ''}`} role="status" aria-live="polite">
+          <div className="spinner" aria-hidden="true" />
+          <div className="loading-label">{loading && `Loading ${loading.name}…`}</div>
         </div>
       </Stage>
 

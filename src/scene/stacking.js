@@ -60,8 +60,9 @@ function dilate(data, w, h) {
   return out
 }
 
-// Attaches `footprint` ({ x0, y0, w, h, data }) to every layer and returns the grid size.
-export function rasterizeFootprints(layers, bounds, maxDim) {
+// Attaches `footprint` ({ x0, y0, w, h, data }) to every layer and returns the
+// grid size. A generator that pauses between layers (see runSliced).
+export function* rasterizeFootprints(layers, bounds, maxDim) {
   const normalizedArea = layers.reduce((sum, { bounds: b }) => sum + ((b.max.x - b.min.x) * (b.max.y - b.min.y)) / maxDim ** 2, 0)
   const resolution = Math.floor(Math.min(1024, Math.max(256, Math.sqrt(PIXEL_BUDGET / Math.max(normalizedArea, 1e-6)))))
   const scale = (resolution - 2 * PAD) / maxDim
@@ -82,6 +83,7 @@ export function rasterizeFootprints(layers, bounds, maxDim) {
     const y1 = Math.min(height, Math.ceil(toGrid(b.max.y, bounds.min.y)) + 2)
     const w = x1 - x0
     const h = y1 - y0
+    yield
     if (w <= 0 || h <= 0) {
       layer.footprint = null
       continue
@@ -112,14 +114,18 @@ export function rasterizeFootprints(layers, bounds, maxDim) {
 // sides of the object show the shapes' colours rather than walls of ink.
 // `rise(i, thickness)` says how far (in multiples of its thickness) layer i
 // climbs over itself where it self-crosses; later layers have to clear that too.
-export function stackHeights(layers, grid, { base, step, lift, embed, rise = () => 0 }) {
+// A generator that pauses between layers (see runSliced).
+export function* stackHeights(layers, grid, { base, step, lift, embed, rise = () => 0 }) {
   const heights = new Float32Array(grid.width * grid.height)
+  const ranges = []
 
-  return layers.map((layer, index) => {
+  for (const [index, layer] of layers.entries()) {
+    yield
     const fp = layer.footprint
     if (!fp) {
       rise(index, base)
-      return { floor: 0, top: base }
+      ranges.push({ floor: 0, top: base })
+      continue
     }
 
     // Fills only look at pixels fully inside them, so shapes that merely touch
@@ -143,6 +149,7 @@ export function stackHeights(layers, grid, { base, step, lift, embed, rise = () 
         if (fp.data[y * fp.w + x] && heights[row + x] < highest) heights[row + x] = highest
       }
     }
-    return { floor, top }
-  })
+    ranges.push({ floor, top })
+  }
+  return ranges
 }

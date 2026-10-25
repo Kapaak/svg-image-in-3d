@@ -60,6 +60,49 @@
 }
 .drop-overlay.visible { opacity: 1; }
 
+/* Fades in after a moment so quick loads don't flash it; the spinner turns on
+   the compositor, so it keeps moving even through a long parsing step. */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: color-mix(in srgb, var(--stage-center) 55%, transparent);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.loading-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.2s ease 0.1s, visibility 0s;
+}
+.loading-label {
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
+
 /* ---------- Panel ---------- */
 
 .panel {

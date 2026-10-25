@@ -3,8 +3,8 @@ import { SvgScene } from '../scene/SvgScene.js'
 
 // React wrapper around SvgScene. The parent drives rotation and export through
 // `ref` (setRotation / resetView / exportSvg) and hears about drag &
-// auto-rotate via onRotate.
-export default function Stage({ ref, svg, shape, look, display, autoRotate, onRotate, children }) {
+// auto-rotate via onRotate, and about each finished build via onBuilt.
+export default function Stage({ ref, svg, shape, look, display, autoRotate, onRotate, onBuilt, children }) {
   const viewportRef = useRef(null)
   const sceneRef = useRef(null)
 
@@ -27,6 +27,10 @@ export default function Stage({ ref, svg, shape, look, display, autoRotate, onRo
   useEffect(() => {
     sceneRef.current.onRotate = onRotate
   }, [onRotate])
+
+  useEffect(() => {
+    sceneRef.current.onBuilt = onBuilt
+  }, [onBuilt])
 
   useEffect(() => {
     sceneRef.current.setLook(look)
