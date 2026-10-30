@@ -1,3 +1,59 @@
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 100;
+  font-style: normal;
+  src: url('./assets/fonts/BrownPro-Thin.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 100;
+  font-style: italic;
+  src: url('./assets/fonts/BrownPro-ThinItalic.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 300;
+  font-style: normal;
+  src: url('./assets/fonts/BrownPro-Light.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 300;
+  font-style: italic;
+  src: url('./assets/fonts/BrownPro-LightItalic.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 400;
+  font-style: normal;
+  src: url('./assets/fonts/BrownPro-Regular.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 400;
+  font-style: italic;
+  src: url('./assets/fonts/BrownPro-Italic.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 700;
+  font-style: normal;
+  src: url('./assets/fonts/BrownPro-Bold.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'LL Brown';
+  font-weight: 700;
+  font-style: italic;
+  src: url('./assets/fonts/BrownPro-BoldItalic.otf') format('opentype');
+}
+
 :root {
   --bg: #f3f3f6;
   --panel: #ffffff;

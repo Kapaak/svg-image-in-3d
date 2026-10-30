@@ -2,9 +2,10 @@ import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { createEdgeLines, createEdgeMaterial } from './edgeLines.js'
 import { sceneToSvg } from './exportSvg.js'
-import { liftProfile } from './ribbon.js'
+import { createRibbonWallText, liftProfile, ribbonLength } from './ribbon.js'
 import { runSliced } from './sliced.js'
 import { stackHeights } from './stacking.js'
+import { createTextFaces, createTextMaterial, createWallTextMaterial, disposeTextMaterial, textFontLoaded, textFontReady } from './textLabel.js'
 import { createLayerGeometry, cssColor } from './svg.js'
 
 // The longest side of every SVG is scaled to this many world units.
@@ -36,6 +37,8 @@ export class SvgScene {
   svg = null
   shape = { depth: 8, gap: 2, flip: false }
   look = { finish: 'satin', useSvgColors: true, color: '#5b5bf0' }
+  // Text shown inside the shape, on the 'front' or the 'back' face.
+  text = { value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0 }
   // 'shaded', 'edges' (white with visible edges) or 'wireframe' (all edges).
   display = 'shaded'
   autoRotate = false
@@ -136,6 +139,64 @@ export class SvgScene {
     this.queueBuild()
   }
 
+  setText(text) {
+    this.text = text
+    this.syncLabel()
+    // Drawn again once the font has loaded, if it wasn't ready.
+    if (!textFontLoaded(text)) textFontReady(text).then(() => this.text === text && this.syncLabel(), () => {})
+  }
+
+  // Puts the text on the faces of every layer, so it follows the height of
+  // each part of the 3D shape.
+  syncLabel() {
+    for (const mesh of this.model.children) {
+      if (!mesh.userData.text) continue
+      mesh.remove(mesh.userData.text)
+      mesh.userData.text.geometry.dispose()
+      mesh.userData.text = null
+    }
+    if (this.textMaterial) disposeTextMaterial(this.textMaterial)
+    this.textMaterial = null
+    const { svg } = this.model.userData
+    if (!svg || !this.text.value.trim()) return
+    const wall = { left: 'left', right: 'right' }[this.text.side]
+    if (wall) this.addWallText(svg, wall)
+    else this.addFaceText(svg)
+    this.applyDisplay()
+  }
+
+  addFaceText(svg) {
+    this.textMaterial = createTextMaterial(svg, this.text)
+    if (!this.textMaterial) return
+    for (const mesh of this.model.children) {
+      // A line's front is only its thin edge; its text goes on the walls.
+      if (mesh.userData.layer.ribbon) continue
+      this.attachText(mesh, createTextFaces(mesh.geometry, svg, this.text.side))
+    }
+  }
+
+  // Text along the side wall of every line, running with the line.
+  addWallText(svg, wall) {
+    const ribbons = this.model.children.filter((mesh) => mesh.userData.layer.ribbon)
+    if (!ribbons.length) return
+    const length = Math.max(...ribbons.map((mesh) => ribbonLength(mesh.userData.layer.ribbon)))
+    const thickness = Math.max(...ribbons.map((mesh) => mesh.userData.thickness))
+    const text = createWallTextMaterial(this.text, length, thickness)
+    if (!text) return
+    this.textMaterial = text.material
+    for (const mesh of ribbons) {
+      const { layer, lift, thickness: height } = mesh.userData
+      this.attachText(mesh, createRibbonWallText(layer.ribbon, lift, height, wall, text))
+    }
+  }
+
+  attachText(mesh, geometry) {
+    if (!geometry) return
+    mesh.userData.text = new THREE.Mesh(geometry, this.textMaterial)
+    mesh.userData.text.renderOrder = 1
+    mesh.add(mesh.userData.text)
+  }
+
   setLook(look) {
     this.look = look
     this.restyle()
@@ -166,6 +227,7 @@ export class SvgScene {
         if (mesh.userData.edges) mesh.add(mesh.userData.edges)
       }
       if (mesh.userData.edges) mesh.userData.edges.visible = lineMode
+      if (mesh.userData.text) mesh.userData.text.visible = this.display !== 'wireframe'
       const fill = { shaded: null, edges: this.paperMaterial, wireframe: this.hiddenMaterial }[this.display]
       mesh.material = fill ? [fill, fill] : mesh.userData.materials
     }
@@ -208,6 +270,7 @@ export class SvgScene {
     this.cancelBuild()
     for (const cleanup of this.cleanups) cleanup()
     disposeModel(this.model)
+    if (this.textMaterial) disposeTextMaterial(this.textMaterial)
     this.edgeMaterial.dispose()
     this.paperMaterial.dispose()
     this.hiddenMaterial.dispose()
@@ -241,6 +304,7 @@ export class SvgScene {
     // The look or display may have changed while this was being built.
     this.restyle()
     this.applyDisplay()
+    this.syncLabel()
   }
 
   *fillModel(model) {
@@ -297,6 +361,8 @@ export class SvgScene {
       mesh.castShadow = true
       mesh.receiveShadow = true
       mesh.userData.layer = layer
+      mesh.userData.lift = lifts[i]
+      mesh.userData.thickness = thickness
       mesh.userData.materials = materials
       // Edge lines are slow too, so in a line mode they are made here, piece by piece.
       if (lineMode) {
@@ -312,6 +378,7 @@ export class SvgScene {
       mesh.geometry.computeBoundingBox()
       box.union(mesh.geometry.boundingBox.clone().translate(mesh.position))
     }
+    model.userData.svg = this.svg
     const s = FIT_SIZE / maxDim
     const zCenter = (box.min.z + box.max.z) / 2
     model.scale.set(s, -s, s)
@@ -457,6 +524,7 @@ function disposeModel(model) {
   for (const mesh of model.children) {
     mesh.geometry.dispose()
     mesh.userData.edges?.geometry.dispose()
+    mesh.userData.text?.geometry.dispose()
     for (const material of mesh.userData.materials) material.dispose()
   }
   model.clear()

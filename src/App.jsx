@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import sampleSvg from './assets/sample.svg?raw'
 import RangeControl from './components/RangeControl.jsx'
 import Stage from './components/Stage.jsx'
 import { EXPORT_STYLES } from './scene/exportSvg.js'
 import { FINISHES, INITIAL_ROTATION } from './scene/SvgScene.js'
 import { parseSvg } from './scene/svg.js'
+import { TEXT_WEIGHTS } from './scene/textLabel.js'
 import './App.css'
 
 const isSvgFile = (file) => file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)
@@ -36,6 +37,7 @@ function App() {
   const [autoRotate, setAutoRotate] = useState(false)
   const [shape, setShape] = useState({ depth: 8, gap: 2, flip: false })
   const [look, setLook] = useState({ finish: 'satin', useSvgColors: true, color: '#5b5bf0' })
+  const [text, setText] = useState({ value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0 })
   const [style, setStyle] = useState('shaded')
   const [toast, setToast] = useState({ message: '', visible: false })
   const [dragOver, setDragOver] = useState(false)
@@ -161,8 +163,14 @@ function App() {
   const updateShape = (key) => (value) => setShape((s) => ({ ...s, [key]: value }))
   const layers = current?.data.layers ?? []
   const layerCount = layers.length
+  const hasLines = layers.some((layer) => layer.ribbon)
+  const onlyLines = layerCount > 0 && layers.every((layer) => layer.ribbon)
   const hasCrossings = layers.some((layer) => layer.ribbon)
   const updating = !loading && current && current.weight !== weight
+
+  // A drawing made only of lines has just a thin front edge; the text goes on the wide walls.
+  const textSide = onlyLines && (text.side === 'front' || text.side === 'back') ? 'right' : text.side
+  const shownText = useMemo(() => ({ ...text, side: textSide }), [text, textSide])
 
   return (
     <main className="app">
@@ -171,6 +179,7 @@ function App() {
         svg={current?.data ?? null}
         shape={shape}
         look={look}
+        text={shownText}
         display={style}
         autoRotate={autoRotate}
         onRotate={setRotation}
@@ -314,6 +323,53 @@ function App() {
               onChange={(e) => setLook({ ...look, color: e.target.value })}
             />
           </div>
+        </section>
+
+        <section className="group">
+          <h2>Text</h2>
+          <div className="control">
+            <textarea
+              aria-label="Text"
+              placeholder="Type any text. It is fitted to the shape."
+              rows={3}
+              value={text.value}
+              onChange={(e) => setText({ ...text, value: e.target.value })}
+            />
+          </div>
+          <div className="row-actions">
+            <select
+              aria-label="Side"
+              value={textSide}
+              onChange={(e) => setText({ ...text, side: e.target.value })}
+            >
+              {!onlyLines && <option value="front">Front side</option>}
+              {!onlyLines && <option value="back">Back side</option>}
+              {hasLines && <option value="left">Wide side of line, left</option>}
+              {hasLines && <option value="right">Wide side of line, right</option>}
+            </select>
+            <input
+              type="color"
+              aria-label="Text color"
+              value={text.color}
+              onChange={(e) => setText({ ...text, color: e.target.value })}
+            />
+          </div>
+          <div className="row-actions">
+            <select
+              aria-label="Font style"
+              value={text.weight}
+              onChange={(e) => setText({ ...text, weight: Number(e.target.value) })}
+            >
+              {Object.entries(TEXT_WEIGHTS).map(([weight, label]) => (
+                <option key={weight} value={weight}>{label}</option>
+              ))}
+            </select>
+            <label className="check">
+              <input type="checkbox" checked={text.italic} onChange={(e) => setText({ ...text, italic: e.target.checked })} /> Italic
+            </label>
+          </div>
+          <RangeControl id="textSize" label="Font size" value={text.size} unit="%" min={25} max={200} step={5} onChange={(size) => setText({ ...text, size })} />
+          <RangeControl id="textSpacing" label="Letter spacing" value={text.spacing} unit="%" min={-10} max={60} step={1} onChange={(spacing) => setText({ ...text, spacing })} />
         </section>
       </aside>
 

@@ -177,7 +177,8 @@ input[type="range"] {
   accent-color: var(--accent);
 }
 
-select {
+select,
+textarea {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -187,12 +188,17 @@ select {
   font: inherit;
 }
 
+textarea { resize: vertical; box-sizing: border-box; }
+
 .row-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
+
+.row-actions + .row-actions { margin-top: 10px; }
+.row-actions + .control { margin-top: 14px; }
 
 .check {
   display: inline-flex;

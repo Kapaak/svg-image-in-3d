@@ -537,6 +537,54 @@ export function liftProfile(ribbon, flip, gap) {
 
 // Builds the solid ribbon: each cross-section spans `thickness` above its
 // lifted base. Group 0 holds top and bottom, group 1 the walls.
+// A and B of a strip, with A the left side of the direction of travel so that
+// faces point outwards.
+function orientStrip(strip) {
+  const { A, B } = strip
+  let side = 0
+  for (let k = 0; k + 1 < A.length; k++) {
+    const m0 = A[k].clone().add(B[k]).multiplyScalar(0.5)
+    const m1 = A[k + 1].clone().add(B[k + 1]).multiplyScalar(0.5)
+    side += (m1.x - m0.x) * (A[k].y - m0.y) - (m1.y - m0.y) * (A[k].x - m0.x)
+  }
+  return side < 0 ? [B, A] : [A, B]
+}
+
+// How far along its line (in SVG units) the ribbon's longest strip runs.
+export function ribbonLength(ribbon) {
+  return ribbon.strips.reduce((max, strip) => Math.max(max, ribbon.mid[strip.start + strip.A.length - 1].s), 0)
+}
+
+// One side wall ('left' or 'right' of the direction of travel) as a copy of
+// the geometry's wall, with UVs for text running along the line: u is the
+// distance along the line over `width`, v the height around the middle of the
+// wall over `height` (both in SVG units; the text is upright, top up).
+export function createRibbonWallText(ribbon, lift, thickness, wall, { width, height }) {
+  const positions = []
+  const uvs = []
+  for (const strip of ribbon.strips) {
+    const points = orientStrip(strip)[wall === 'left' ? 0 : 1]
+    const at = (k) => {
+      const base = lift[strip.start + k] * thickness
+      const u = ribbon.mid[strip.start + k].s / width
+      // Seen from outside, the line runs right to left along the right wall.
+      return { p: points[k], base, u: wall === 'left' ? u : 1 - u }
+    }
+    const vertex = ({ p, base, u }, top) => {
+      positions.push(p.x, p.y, base + (top ? thickness : 0))
+      uvs.push(u, 0.5 - ((top ? thickness : 0) - thickness / 2) / height)
+    }
+    for (let k = 0; k + 1 < points.length; k++) {
+      const [a, b] = [at(k), at(k + 1)]
+      for (const [c, top] of [[a, false], [a, true], [b, true], [a, false], [b, true], [b, false]]) vertex(c, top)
+    }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  return geometry
+}
+
 export function createRibbonGeometry(ribbon, lift, thickness) {
   const positions = []
   const faces = []
@@ -546,17 +594,7 @@ export function createRibbonGeometry(ribbon, lift, thickness) {
   for (const strip of ribbon.strips) {
     const count = strip.A.length
     const base = (k) => lift[strip.start + k] * thickness
-    let A = strip.A
-    let B = strip.B
-
-    // Make A the left side of the direction of travel so faces point outwards.
-    let side = 0
-    for (let k = 0; k + 1 < count; k++) {
-      const m0 = A[k].clone().add(B[k]).multiplyScalar(0.5)
-      const m1 = A[k + 1].clone().add(B[k + 1]).multiplyScalar(0.5)
-      side += (m1.x - m0.x) * (A[k].y - m0.y) - (m1.y - m0.y) * (A[k].x - m0.x)
-    }
-    if (side < 0) [A, B] = [B, A]
+    const [A, B] = orientStrip(strip)
 
     const top = []
     const bottom = []
