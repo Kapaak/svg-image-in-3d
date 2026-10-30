@@ -159,7 +159,7 @@ export class SvgScene {
     this.textMaterial = null
     const { svg } = this.model.userData
     if (!svg || !this.text.value.trim()) return
-    const wall = { left: 'left', right: 'right' }[this.text.side]
+    const wall = { left: 'left', right: 'right', both: 'both' }[this.text.side]
     if (wall) this.addWallText(svg, wall)
     else this.addFaceText(svg)
     this.applyDisplay()

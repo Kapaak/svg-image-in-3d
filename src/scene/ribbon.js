@@ -555,7 +555,7 @@ export function ribbonLength(ribbon) {
   return ribbon.strips.reduce((max, strip) => Math.max(max, ribbon.mid[strip.start + strip.A.length - 1].s), 0)
 }
 
-// One side wall ('left' or 'right' of the direction of travel) as a copy of
+// One side wall ('left' or 'right' of the direction of travel, or 'both') as a copy of
 // the geometry's wall, with UVs for text running along the line: u is the
 // distance along the line over `width`, v the height around the middle of the
 // wall over `height` (both in SVG units; the text is upright, top up).
@@ -563,20 +563,22 @@ export function createRibbonWallText(ribbon, lift, thickness, wall, { width, hei
   const positions = []
   const uvs = []
   for (const strip of ribbon.strips) {
-    const points = orientStrip(strip)[wall === 'left' ? 0 : 1]
-    const at = (k) => {
-      const base = lift[strip.start + k] * thickness
-      const u = ribbon.mid[strip.start + k].s / width
-      // Seen from outside, the line runs right to left along the right wall.
-      return { p: points[k], base, u: wall === 'left' ? u : 1 - u }
-    }
-    const vertex = ({ p, base, u }, top) => {
-      positions.push(p.x, p.y, base + (top ? thickness : 0))
-      uvs.push(u, 0.5 - ((top ? thickness : 0) - thickness / 2) / height)
-    }
-    for (let k = 0; k + 1 < points.length; k++) {
-      const [a, b] = [at(k), at(k + 1)]
-      for (const [c, top] of [[a, false], [a, true], [b, true], [a, false], [b, true], [b, false]]) vertex(c, top)
+    for (const side of wall === 'both' ? ['left', 'right'] : [wall]) {
+      const points = orientStrip(strip)[side === 'left' ? 0 : 1]
+      const at = (k) => {
+        const base = lift[strip.start + k] * thickness
+        const u = ribbon.mid[strip.start + k].s / width
+        // Seen from outside, the line runs right to left along the right wall.
+        return { p: points[k], base, u: side === 'left' ? u : 1 - u }
+      }
+      const vertex = ({ p, base, u }, top) => {
+        positions.push(p.x, p.y, base + (top ? thickness : 0))
+        uvs.push(u, 0.5 - ((top ? thickness : 0) - thickness / 2) / height)
+      }
+      for (let k = 0; k + 1 < points.length; k++) {
+        const [a, b] = [at(k), at(k + 1)]
+        for (const [c, top] of [[a, false], [a, true], [b, true], [a, false], [b, true], [b, false]]) vertex(c, top)
+      }
     }
   }
   const geometry = new THREE.BufferGeometry()

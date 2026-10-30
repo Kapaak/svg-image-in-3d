@@ -346,6 +346,7 @@ function App() {
               {!onlyLines && <option value="back">Back side</option>}
               {hasLines && <option value="left">Wide side of line, left</option>}
               {hasLines && <option value="right">Wide side of line, right</option>}
+              {hasLines && <option value="both">Wide side of line, both</option>}
             </select>
             <input
               type="color"
