@@ -246,12 +246,14 @@ export function createWallTextMaterial(text, length, thickness) {
   setFont(ctx, size, text)
   const textWidth = ctx.measureText(phrase).width
 
-  // Repeat the phrase along the whole wall, spaced evenly.
-  const count = Math.max(1, Math.floor((width + size) / (textWidth + size * 1.5)))
-  const spacing = (width - count * textWidth) / count
+  // Repeat the phrase along the wall with the chosen gap (a share of the font
+  // size), as many whole copies as fit, centred.
+  const gap = (size * text.gap) / 100
+  const count = Math.max(1, Math.floor((width + gap) / (textWidth + gap)))
+  const start = (width - (count * textWidth + (count - 1) * gap)) / 2
   ctx.fillStyle = color
   ctx.textBaseline = 'middle'
-  for (let i = 0; i < count; i++) ctx.fillText(phrase, spacing / 2 + i * (textWidth + spacing), height / 2)
+  for (let i = 0; i < count; i++) ctx.fillText(phrase, start + i * (textWidth + gap), height / 2)
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace

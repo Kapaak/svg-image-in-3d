@@ -38,7 +38,7 @@ export class SvgScene {
   shape = { depth: 8, gap: 2, flip: false }
   look = { finish: 'satin', useSvgColors: true, color: '#5b5bf0' }
   // Text shown inside the shape, on the 'front' or the 'back' face.
-  text = { value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0 }
+  text = { value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0, gap: 150 }
   // 'shaded', 'edges' (white with visible edges) or 'wireframe' (all edges).
   display = 'shaded'
   autoRotate = false

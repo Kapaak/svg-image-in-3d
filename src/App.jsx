@@ -37,7 +37,7 @@ function App() {
   const [autoRotate, setAutoRotate] = useState(false)
   const [shape, setShape] = useState({ depth: 8, gap: 2, flip: false })
   const [look, setLook] = useState({ finish: 'satin', useSvgColors: true, color: '#5b5bf0' })
-  const [text, setText] = useState({ value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0 })
+  const [text, setText] = useState({ value: '', side: 'front', color: '#ffffff', size: 100, weight: 700, italic: false, spacing: 0, gap: 150 })
   const [style, setStyle] = useState('shaded')
   const [toast, setToast] = useState({ message: '', visible: false })
   const [dragOver, setDragOver] = useState(false)
@@ -371,6 +371,18 @@ function App() {
           </div>
           <RangeControl id="textSize" label="Font size" value={text.size} unit="%" min={25} max={200} step={5} onChange={(size) => setText({ ...text, size })} />
           <RangeControl id="textSpacing" label="Letter spacing" value={text.spacing} unit="%" min={-10} max={60} step={1} onChange={(spacing) => setText({ ...text, spacing })} />
+          <RangeControl
+            id="textGap"
+            label="Gap between texts"
+            title={hasLines ? 'Space between the repeats of the text along a line' : 'The text repeats only along lines'}
+            value={text.gap}
+            unit="%"
+            min={0}
+            max={500}
+            step={10}
+            disabled={!hasLines || textSide === 'front' || textSide === 'back'}
+            onChange={(gap) => setText({ ...text, gap })}
+          />
         </section>
       </aside>
 
