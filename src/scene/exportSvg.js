@@ -2,6 +2,7 @@ import ClipperLib from 'clipper-lib'
 import * as THREE from 'three'
 import { CREASE } from './edgeLines.js'
 import { fitPathData } from './fitCurves.js'
+import { textOutlines } from './textLabel.js'
 
 // Longest side of the image the export is worked out at, in pixels.
 const EXPORT_SIZE = 2048
@@ -43,7 +44,7 @@ export function sceneToSvg({ renderer, scene, camera, model, style = 'shaded' })
   camera.updateMatrixWorld()
   model.updateMatrixWorld(true)
 
-  const { triangles, groups, idScene } = collectTriangles(model)
+  const { triangles, groups, idScene, texts } = collectTriangles(model)
   if (!triangles.length) {
     disposeScene(idScene)
     return null
@@ -132,7 +133,8 @@ export function sceneToSvg({ renderer, scene, camera, model, style = 'shaded' })
   const { shown, splits } = visibleParts(visible, screen, depth, width, height)
 
   if (style === 'edges') return lineDrawing(visibleEdgeSegments(visible, shown, splits, screen, edgeInfo))
-  return shadedDrawing(triangles, groups, visible, shown, screen, camera)
+  const lettering = letteringPieces(texts, shown, camera, width, height)
+  return shadedDrawing(triangles, groups, visible, shown, screen, camera, lettering)
 }
 
 /* ---------- Visibility ---------- */
@@ -318,10 +320,74 @@ function screenGrid(indices, boxes, width, height) {
   }
 }
 
+/* ---------- Lettering ---------- */
+
+// The lettering as shapes on screen, per text material: each outline loop is
+// cut to the triangle it lies on (in the texture), carried onto that triangle
+// in 3D and the screen (exactly, as the triangle is flat), then cut to the part
+// of the triangle that is visible.
+function letteringPieces(texts, shown, camera, width, height) {
+  const point = new THREE.Vector3()
+  const toScreen = (v) => {
+    point.copy(v).project(camera)
+    return { X: Math.round(((point.x + 1) / 2) * width * SCALE), Y: Math.round(((1 - point.y) / 2) * height * SCALE) }
+  }
+  const pieces = []
+  for (const [material, items] of texts) {
+    const { width: textureWidth, height: textureHeight, loops } = textOutlines(material)
+    const collected = []
+    for (const { t, world, uv } of items) {
+      const regions = shown.get(t)
+      if (!regions?.length) continue
+      const [p0, p1, p2] = uv.map(([u, v]) => [u * textureWidth, v * textureHeight])
+      const e1 = [p1[0] - p0[0], p1[1] - p0[1]]
+      const e2 = [p2[0] - p0[0], p2[1] - p0[1]]
+      const det = e1[0] * e2[1] - e1[1] * e2[0]
+      if (Math.abs(det) < 1e-9) continue
+      const box = boundingBox([p0, p1, p2])
+      const near = loops.filter((loop) => boxesOverlap(loop.box, box))
+      if (!near.length) continue
+
+      const cut = new ClipperLib.Clipper()
+      cut.AddPaths(near.map((loop) => loop.path), ClipperLib.PolyType.ptSubject, true)
+      cut.AddPath([p0, p1, p2].map(([x, y]) => ({ X: Math.round(x * 16), Y: Math.round(y * 16) })), ClipperLib.PolyType.ptClip, true)
+      const inside = []
+      cut.Execute(ClipperLib.ClipType.ctIntersection, inside, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero)
+      if (!inside.length) continue
+
+      const onScreen = inside.map((path) => path.map(({ X, Y }) => {
+        const dx = X / 16 - p0[0]
+        const dy = Y / 16 - p0[1]
+        const a = (dx * e2[1] - dy * e2[0]) / det
+        const b = (e1[0] * dy - e1[1] * dx) / det
+        return toScreen(new THREE.Vector3(
+          world[0].x + a * (world[1].x - world[0].x) + b * (world[2].x - world[0].x),
+          world[0].y + a * (world[1].y - world[0].y) + b * (world[2].y - world[0].y),
+          world[0].z + a * (world[1].z - world[0].z) + b * (world[2].z - world[0].z),
+        ))
+      }))
+      const visible = new ClipperLib.Clipper()
+      visible.AddPaths(onScreen, ClipperLib.PolyType.ptSubject, true)
+      visible.AddPaths(regions, ClipperLib.PolyType.ptClip, true)
+      const part = []
+      visible.Execute(ClipperLib.ClipType.ctIntersection, part, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero)
+      collected.push(...part)
+    }
+    if (!collected.length) continue
+    const union = new ClipperLib.Clipper()
+    union.AddPaths(collected, ClipperLib.PolyType.ptSubject, true)
+    const merged = []
+    union.Execute(ClipperLib.ClipType.ctUnion, merged, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero)
+    const contours = merged.filter((contour) => Math.abs(ClipperLib.Clipper.Area(contour)) >= SCALE * SCALE * 0.05)
+    if (contours.length) pieces.push({ color: material.userData.color, contours })
+  }
+  return pieces
+}
+
 /* ---------- Shaded drawing ---------- */
 
 // One filled shape per flat face: the visible parts of its triangles, merged.
-function shadedDrawing(triangles, groups, visible, shown, screen, camera) {
+function shadedDrawing(triangles, groups, visible, shown, screen, camera, lettering) {
   const pieces = groups.map(() => [])
   for (const t of visible) {
     const triangle = triangles[t]
@@ -357,6 +423,12 @@ function shadedDrawing(triangles, groups, visible, shown, screen, camera) {
     const opacity = group.opacity < 1 ? ` fill-opacity="${group.opacity}" stroke-opacity="${group.opacity}"` : ''
     return `<path fill="${color}" stroke="${color}"${opacity} d="${d}"/>`
   })
+  // The lettering lies on top; a hairline stroke closes the seams between the
+  // triangles it was cut along.
+  for (const { color, contours } of lettering) {
+    const d = contours.map((contour) => fitPathData(toPixels(contour, crop), { closed: true, tolerance: CURVE_TOLERANCE })).join('')
+    paths.push(`<path fill="${color}" stroke="${color}" stroke-width="0.3" d="${d}"/>`)
+  }
 
   // The thin stroke in each face's own colour closes the hairline seams that
   // anti-aliasing would otherwise show where faces meet.
@@ -650,6 +722,9 @@ function collectTriangles(model) {
   const b = new THREE.Vector3()
   const c = new THREE.Vector3()
   const normal = new THREE.Vector3()
+  // Triangles by mesh and corners, to find the ones that carry lettering.
+  const byCorners = new Map()
+  const cornersKey = (meshIndex, ...corners) => `${meshIndex}|${corners.map((p) => `${Math.round(p.x * 1e4)},${Math.round(p.y * 1e4)},${Math.round(p.z * 1e4)}`).sort().join('|')}`
 
   model.children.forEach((mesh, meshIndex) => {
     if (!mesh.isMesh || !mesh.visible) return
@@ -677,6 +752,7 @@ function collectTriangles(model) {
         }
 
         triangles.push({ vertices: [a.clone(), b.clone(), c.clone()], group: groupIndex.get(key), mesh: meshIndex, material: materialIndex })
+        byCorners.set(cornersKey(meshIndex, a, b, c), triangles.length - 1)
         const id = triangles.length
         for (let k = 0; k < 3; k++) {
           colors[(v + k) * 3] = ((id >> 16) & 255) / 255
@@ -693,7 +769,23 @@ function collectTriangles(model) {
     idScene.add(idMesh)
   })
 
-  return { triangles, groups, idScene }
+  // The lettering: the triangles of each text overlay (the same as ones of
+  // their layer), with the texture position of their corners.
+  const texts = new Map()
+  model.children.forEach((mesh, meshIndex) => {
+    const overlay = mesh.userData.text
+    if (!overlay?.visible || !mesh.visible) return
+    const { position, uv } = overlay.geometry.attributes
+    for (let v = 0; v + 2 < position.count; v += 3) {
+      const world = [0, 1, 2].map((k) => new THREE.Vector3().fromBufferAttribute(position, v + k).applyMatrix4(overlay.matrixWorld))
+      const t = byCorners.get(cornersKey(meshIndex, ...world))
+      if (t === undefined) continue
+      if (!texts.has(overlay.material)) texts.set(overlay.material, [])
+      texts.get(overlay.material).push({ t, world, uv: [0, 1, 2].map((k) => [uv.getX(v + k), uv.getY(v + k)]) })
+    }
+  })
+
+  return { triangles, groups, idScene, texts }
 }
 
 // Renders triangle IDs into an off-screen target (no anti-aliasing, no colour
@@ -719,10 +811,16 @@ function renderShades(renderer, scene, camera, width, height) {
   const size = renderer.getSize(new THREE.Vector2())
   const pixelRatio = renderer.getPixelRatio()
   const casters = []
+  // The lettering is exported as shapes of its own, so it must not tint the faces.
+  const lettering = []
   scene.traverse((object) => {
     if (object.isLight && object.castShadow) {
       casters.push(object)
       object.castShadow = false
+    }
+    if (object.userData.isText && object.visible) {
+      lettering.push(object)
+      object.visible = false
     }
   })
 
@@ -734,6 +832,7 @@ function renderShades(renderer, scene, camera, width, height) {
   gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
 
   for (const light of casters) light.castShadow = true
+  for (const object of lettering) object.visible = true
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(size.x, size.y, false)
   // Redraw right away so the preview doesn't flash empty.

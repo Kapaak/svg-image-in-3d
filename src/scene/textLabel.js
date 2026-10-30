@@ -170,7 +170,7 @@ export function createTextMaterial(svg, text) {
   texture.anisotropy = 8
   // The text is drawn on top of the faces it lies on, so it is pulled a
   // little towards the camera in the depth test.
-  return new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
     depthWrite: false,
@@ -180,6 +180,8 @@ export function createTextMaterial(svg, text) {
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -2,
   })
+  material.userData.color = color
+  return material
 }
 
 // A copy of the front (or back) faces of a layer's geometry, with UVs that
@@ -265,5 +267,126 @@ export function createWallTextMaterial(text, length, thickness) {
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -2,
   })
+  material.userData.color = color
   return { material, width: length, height: (length * height) / width }
+}
+
+/* ---------- Outlines of the lettering (for export) ---------- */
+
+// Clipper works on integers: 1/16 texture pixel.
+const TEXEL = 16
+const OUTLINE_TOLERANCE = 0.25
+
+// The edges of the lettering on a text material's texture, as closed loops of
+// texture pixels (marching squares at half opacity, so the corners are smooth
+// rather than stepped), thinned out within a quarter pixel. Each loop also has
+// its box and its path in Clipper units.
+export function textOutlines(material) {
+  if (material.userData.outlines) return material.userData.outlines
+  const canvas = material.map.image
+  const { width, height } = canvas
+  const data = canvas.getContext('2d').getImageData(0, 0, width, height).data
+  const loops = traceLoops((x, y) => (x < 0 || y < 0 || x >= width || y >= height ? 0 : data[(y * width + x) * 4 + 3] / 255), width, height)
+    .map((loop) => simplifyLoop(loop, OUTLINE_TOLERANCE))
+    .filter((points) => points.length >= 3)
+    .map((points) => {
+      const xs = points.map(([x]) => x)
+      const ys = points.map(([, y]) => y)
+      return {
+        box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+        path: points.map(([x, y]) => ({ X: Math.round(x * TEXEL), Y: Math.round(y * TEXEL) })),
+      }
+    })
+  material.userData.outlines = { width, height, loops }
+  return material.userData.outlines
+}
+
+// Marching squares over `at(x, y)` (0..1), with the covered side always on the
+// same side of each loop, so that holes run the other way round.
+function traceLoops(at, width, height) {
+  const edgeId = (horizontal, x, y) => ((y + 1) * (width + 2) + (x + 1)) * 2 + (horizontal ? 0 : 1)
+  const next = new Map()
+  const points = new Map()
+  for (let y = -1; y < height; y++) {
+    for (let x = -1; x < width; x++) {
+      // Corners and sides clockwise from the top left.
+      const corners = [[x, y, at(x, y)], [x + 1, y, at(x + 1, y)], [x + 1, y + 1, at(x + 1, y + 1)], [x, y + 1, at(x, y + 1)]]
+      const inside = corners.map(([, , value]) => value >= 0.5)
+      if (inside.every((on) => on === inside[0])) continue
+      const ids = [edgeId(true, x, y), edgeId(false, x + 1, y), edgeId(true, x, y + 1), edgeId(false, x, y)]
+      const crossings = []
+      for (let side = 0; side < 4; side++) {
+        const [x0, y0, a] = corners[side]
+        const [x1, y1, b] = corners[(side + 1) % 4]
+        if (inside[side] === inside[(side + 1) % 4]) continue
+        const t = (0.5 - a) / (b - a)
+        points.set(ids[side], [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t])
+        crossings.push({ id: ids[side], enters: inside[(side + 1) % 4] })
+      }
+      if (crossings.length === 2) {
+        const [from, to] = crossings[0].enters ? crossings : [crossings[1], crossings[0]]
+        next.set(from.id, to.id)
+        continue
+      }
+      // A saddle: the centre decides whether the covered corners are joined.
+      const joined = corners.reduce((sum, [, , value]) => sum + value, 0) / 4 >= 0.5
+      crossings.forEach((crossing, i) => {
+        if (crossing.enters) next.set(crossing.id, crossings[(i + (joined ? 3 : 1)) % 4].id)
+      })
+    }
+  }
+
+  const loops = []
+  const seen = new Set()
+  for (const start of next.keys()) {
+    if (seen.has(start)) continue
+    const loop = []
+    for (let id = start; id !== undefined && !seen.has(id); id = next.get(id)) {
+      seen.add(id)
+      loop.push(points.get(id))
+    }
+    if (loop.length >= 3) loops.push(loop)
+  }
+  return loops
+}
+
+// Douglas–Peucker on a closed loop: split at the point farthest from the
+// start, then thin out both halves.
+function simplifyLoop(loop, tolerance) {
+  const distance = (p, a, b) => {
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const length = Math.hypot(dx, dy)
+    return length ? Math.abs(dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / length : Math.hypot(p[0] - a[0], p[1] - a[1])
+  }
+  const thin = (chain) => {
+    const keep = new Uint8Array(chain.length)
+    keep[0] = keep[chain.length - 1] = 1
+    const stack = [[0, chain.length - 1]]
+    while (stack.length) {
+      const [first, last] = stack.pop()
+      let worst = 0
+      let index = -1
+      for (let i = first + 1; i < last; i++) {
+        const d = distance(chain[i], chain[first], chain[last])
+        if (d > worst) {
+          worst = d
+          index = i
+        }
+      }
+      if (worst > tolerance) {
+        keep[index] = 1
+        stack.push([first, index], [index, last])
+      }
+    }
+    return chain.filter((_, i) => keep[i])
+  }
+  let far = 0
+  loop.forEach((p, i) => {
+    if (Math.hypot(p[0] - loop[0][0], p[1] - loop[0][1]) > Math.hypot(loop[far][0] - loop[0][0], loop[far][1] - loop[0][1])) far = i
+  })
+  if (!far) return loop
+  const first = thin(loop.slice(0, far + 1))
+  const second = thin([...loop.slice(far), loop[0]])
+  return [...first.slice(0, -1), ...second.slice(0, -1)]
 }

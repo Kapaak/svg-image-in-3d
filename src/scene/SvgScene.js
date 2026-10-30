@@ -194,6 +194,7 @@ export class SvgScene {
     if (!geometry) return
     mesh.userData.text = new THREE.Mesh(geometry, this.textMaterial)
     mesh.userData.text.renderOrder = 1
+    mesh.userData.text.userData.isText = true
     mesh.add(mesh.userData.text)
   }
 
